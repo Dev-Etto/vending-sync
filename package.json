@@ -7,6 +7,7 @@
     "dev": "pnpm run --parallel dev:api dev:web",
     "db:generate": "pnpm --filter db generate",
     "db:migrate": "pnpm --filter db migrate",
-    "db:seed": "pnpm --filter db seed"
+    "db:seed": "pnpm --filter db seed",
+    "db:studio": "pnpm --filter db studio"
   }
 }

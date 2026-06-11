@@ -1,2 +1,2 @@
-// Placeholder — será preenchido na Etapa 3 (Drizzle Database)
-export {}
+export { db, migrationClient } from './client'
+export * from './schema'
