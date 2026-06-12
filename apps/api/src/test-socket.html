@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>VendingSync — Socket.io Test</title>
+  <style>
+    body { font-family: monospace; padding: 20px; background: #111; color: #0f0; }
+    h1 { color: #fff; }
+    #status { padding: 8px; border-radius: 4px; display: inline-block; margin-bottom: 16px; }
+    .connected { background: #0a3; color: #fff; }
+    .disconnected { background: #a00; color: #fff; }
+    #events { list-style: none; padding: 0; }
+    #events li { padding: 4px 0; border-bottom: 1px solid #333; }
+    .ts { color: #888; }
+    .evt-transaction { color: #0ff; }
+    .evt-machine { color: #ff0; }
+  </style>
+</head>
+<body>
+  <h1>Socket.io — Monitor ao Vivo</h1>
+  <div id="status" class="disconnected">Desconectado</div>
+  <p>Abra o DevTools → Network → WS para ver os frames WebSocket</p>
+  <ul id="events"></ul>
+
+  <script src="https://cdn.socket.io/4.8.0/socket.io.min.js"></script>
+  <script>
+    const socket = io('http://localhost:3001')
+    const statusEl = document.getElementById('status')
+    const eventsList = document.getElementById('events')
+
+    function addEvent(text, cssClass = '') {
+      const li = document.createElement('li')
+      const ts = new Date().toLocaleTimeString('pt-BR', { hour12: false })
+      li.innerHTML = `<span class="ts">[${ts}]</span> <span class="${cssClass}">${text}</span>`
+      eventsList.prepend(li)
+    }
+
+    socket.on('connect', () => {
+      statusEl.textContent = `Conectado — ID: ${socket.id}`
+      statusEl.className = 'connected'
+      addEvent('Conectado ao servidor')
+    })
+
+    socket.on('disconnect', (reason) => {
+      statusEl.textContent = `Desconectado — ${reason}`
+      statusEl.className = 'disconnected'
+      addEvent(`Desconectado: ${reason}`)
+    })
+
+    socket.on('new_transaction', (data) => {
+      const { transaction, machine } = data
+      addEvent(
+        `new_transaction — R$ ${parseFloat(transaction.amount).toFixed(2)} via ${transaction.paymentMethod} | Máquina: ${machine.name} | Estoque: ${machine.stockLevel}%`,
+        'evt-transaction'
+      )
+    })
+
+    socket.on('machine_updated', (data) => {
+      const { machine } = data
+      addEvent(
+        `machine_updated — ${machine.name} | Status: ${machine.status} | Estoque: ${machine.stockLevel}%`,
+        'evt-machine'
+      )
+    })
+  </script>
+</body>
+</html>

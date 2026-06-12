@@ -3,13 +3,12 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod'
 import { z } from 'zod'
 import bcrypt from 'bcryptjs'
 import { eq } from 'drizzle-orm'
-import { db, users } from '@vending-sync/db'
+import { db, users, UserPublicSchema } from '@vending-sync/db'
 import { env } from '../env'
 
 export async function authRoutes(app: FastifyInstance) {
   const typedApp = app.withTypeProvider<ZodTypeProvider>()
 
-  // POST /api/auth/login
   typedApp.post(
     '/login',
     {
@@ -19,14 +18,7 @@ export async function authRoutes(app: FastifyInstance) {
           password: z.string().min(1),
         }),
         response: {
-          200: z.object({
-            token: z.string(),
-            user: z.object({
-              id: z.string(),
-              email: z.string(),
-              role: z.string(),
-            }),
-          }),
+          200: z.object({ token: z.string(), user: UserPublicSchema }),
           401: z.object({ error: z.string() }),
         },
       },
@@ -60,7 +52,6 @@ export async function authRoutes(app: FastifyInstance) {
     }
   )
 
-  // GET /api/auth/me — retorna os dados do usuário logado
   typedApp.get(
     '/me',
     {
@@ -68,18 +59,15 @@ export async function authRoutes(app: FastifyInstance) {
         async (request, reply) => {
           try {
             await request.jwtVerify()
-          } catch {
+          } catch (err) {
+            request.log.warn({ err }, 'JWT verification failed')
             reply.status(401).send({ error: 'Unauthorized' })
           }
         },
       ],
       schema: {
         response: {
-          200: z.object({
-            id: z.string(),
-            email: z.string(),
-            role: z.string(),
-          }),
+          200: UserPublicSchema,
           401: z.object({ error: z.string() }),
         },
       },

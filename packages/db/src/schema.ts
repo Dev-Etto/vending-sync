@@ -58,7 +58,6 @@ export const users = pgTable('users', {
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 })
 
-// Tipos TypeScript inferidos do schema — type safety de graça!
 export type Machine = typeof machines.$inferSelect
 export type NewMachine = typeof machines.$inferInsert
 export type Transaction = typeof transactions.$inferSelect

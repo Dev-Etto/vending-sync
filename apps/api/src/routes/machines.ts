@@ -1,98 +1,101 @@
 import { FastifyInstance } from 'fastify'
 import { ZodTypeProvider } from 'fastify-type-provider-zod'
 import { z } from 'zod'
-import { db, machines } from '@vending-sync/db'
+import { db, machines, MachineSelectSchema, MachineInsertSchema, MachinePatchSchema } from '@vending-sync/db'
 import { eq, desc } from 'drizzle-orm'
 import { authenticate } from '../middleware/auth'
+import { emit } from '../services/socket'
+
+const serializeMachine = (m: typeof machines.$inferSelect) => ({
+  ...m,
+  lastHeartbeat: m.lastHeartbeat?.toISOString() ?? null,
+  createdAt: m.createdAt.toISOString(),
+})
 
 export async function machineRoutes(app: FastifyInstance) {
   const typedApp = app.withTypeProvider<ZodTypeProvider>()
 
-  // GET /api/machines — lista todas as máquinas
   typedApp.get(
     '/',
     {
       preHandler: [authenticate],
-      schema: {
-        response: {
-          200: z.array(
-            z.object({
-              id: z.string().uuid(),
-              serialNumber: z.string(),
-              name: z.string(),
-              location: z.string().nullable(),
-              status: z.enum(['ONLINE', 'OFFLINE', 'MAINTENANCE']),
-              stockLevel: z.number(),
-              lastHeartbeat: z.string().datetime().nullable(),
-              createdAt: z.string().datetime(),
-            })
-          ),
-        },
-      },
+      schema: { response: { 200: z.array(MachineSelectSchema) } },
     },
-    async (request, reply) => {
-      const allMachines = await db.select().from(machines).orderBy(desc(machines.createdAt))
-      return allMachines.map((m) => ({
-        ...m,
-        lastHeartbeat: m.lastHeartbeat?.toISOString() ?? null,
-        createdAt: m.createdAt.toISOString(),
-      }))
+    async () => {
+      const all = await db.select().from(machines).orderBy(desc(machines.createdAt))
+      return all.map(serializeMachine)
     }
   )
 
-  // POST /api/machines — cadastra nova máquina
   typedApp.post(
     '/',
     {
       preHandler: [authenticate],
-      schema: {
-        body: z.object({
-          serialNumber: z.string().min(1).max(100),
-          name: z.string().min(1).max(255),
-          location: z.string().optional(),
-        }),
-        response: {
-          201: z.object({
-            id: z.string().uuid(),
-            serialNumber: z.string(),
-            name: z.string(),
-            location: z.string().nullable(),
-            status: z.enum(['ONLINE', 'OFFLINE', 'MAINTENANCE']),
-            stockLevel: z.number(),
-            lastHeartbeat: z.string().datetime().nullable(),
-            createdAt: z.string().datetime(),
-          }),
-        },
-      },
+      schema: { body: MachineInsertSchema, response: { 201: MachineSelectSchema } },
     },
     async (request, reply) => {
-      const { serialNumber, name, location } = request.body
-
-      const [machine] = await db
-        .insert(machines)
-        .values({ serialNumber, name, location })
-        .returning()
-
-      reply.status(201).send({
-        ...machine,
-        lastHeartbeat: machine.lastHeartbeat?.toISOString() ?? null,
-        createdAt: machine.createdAt.toISOString(),
-      })
+      const [machine] = await db.insert(machines).values(request.body).returning()
+      reply.status(201).send(serializeMachine(machine))
     }
   )
 
-  // POST /api/machines/:id/telemetry — heartbeat da máquina física
+  typedApp.get(
+    '/:id',
+    {
+      preHandler: [authenticate],
+      schema: {
+        params: z.object({ id: z.string().uuid() }),
+        response: { 200: MachineSelectSchema, 404: z.object({ error: z.string() }) },
+      },
+    },
+    async (request, reply) => {
+      const [machine] = await db.select().from(machines).where(eq(machines.id, request.params.id)).limit(1)
+      if (!machine) return reply.status(404).send({ error: 'Máquina não encontrada' })
+      return serializeMachine(machine)
+    }
+  )
+
+  typedApp.patch(
+    '/:id',
+    {
+      preHandler: [authenticate],
+      schema: {
+        params: z.object({ id: z.string().uuid() }),
+        body: MachinePatchSchema,
+        response: { 200: MachineSelectSchema, 404: z.object({ error: z.string() }) },
+      },
+    },
+    async (request, reply) => {
+      const { id } = request.params
+
+      const [updated] = await db
+        .update(machines)
+        .set(request.body)
+        .where(eq(machines.id, id))
+        .returning()
+
+      if (!updated) return reply.status(404).send({ error: 'Máquina não encontrada' })
+
+      const serialized = serializeMachine(updated)
+      emit('machine_updated', { machine: serialized })
+      request.log.info({ machineId: id, ...request.body }, 'Machine updated by operator')
+
+      return serialized
+    }
+  )
+
   typedApp.post(
     '/:id/telemetry',
     {
       schema: {
         params: z.object({ id: z.string().uuid() }),
         body: z.object({
-          stockLevel: z.number().min(0).max(100),
           status: z.enum(['ONLINE', 'OFFLINE', 'MAINTENANCE']).optional(),
+          stockLevel: z.number().min(0).max(100),
         }),
         response: {
-          200: z.object({ success: z.boolean() }),
+          200: z.object({ machine: MachineSelectSchema }),
+          404: z.object({ error: z.string() }),
         },
       },
     },
@@ -100,19 +103,19 @@ export async function machineRoutes(app: FastifyInstance) {
       const { id } = request.params
       const { stockLevel, status } = request.body
 
-      await db
+      const [updated] = await db
         .update(machines)
-        .set({
-          stockLevel,
-          status: status ?? 'ONLINE',
-          lastHeartbeat: new Date(),
-        })
+        .set({ stockLevel, status: status ?? 'ONLINE', lastHeartbeat: new Date() })
         .where(eq(machines.id, id))
+        .returning()
 
-      // Aqui emitiremos evento Socket.io na Etapa 7
+      if (!updated) return reply.status(404).send({ error: 'Máquina não encontrada' })
+
+      const serialized = serializeMachine(updated)
+      emit('machine_updated', { machine: serialized })
       request.server.log.info({ machineId: id, stockLevel }, 'Telemetry received')
 
-      return { success: true }
+      return reply.send({ machine: serialized })
     }
   )
 }
